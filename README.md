@@ -73,6 +73,5 @@ for the generator CLI), `zip` the three output files into
 
 ## Report
 
-See [report.md](report.md) for the design write-up — reference vs optimized
-implementation, the chunked-ladder data structure, allocation analysis, and
-benchmark results across the 18-dataset sweep.
+See [report.md](report.md) for the design write-up — design goals and non-goals, data structure choices and
+trade-offs, complexity analysis, testing approach and further optimization directions.
