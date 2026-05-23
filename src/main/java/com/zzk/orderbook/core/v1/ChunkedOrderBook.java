@@ -235,10 +235,17 @@ public final class ChunkedOrderBook implements L3OrderBook {
             return 0;
         }
         BookSide bs = sideFor(side);
+        // Top-N fast path: start at the cached best chunk/offset, avoid the
+        // directory iterator allocation, and avoid scanning bitmap words before
+        // the known best offset within the first chunk. Top-N levels almost
+        // always fit inside the best chunk on a populated book, so the
+        // fallback below is rarely hit.
+        if (fromLevelInclusive == 0) {
+            return forEachLevelFromBest(bs, limit, consumer);
+        }
+
         int skipped = 0;
         int emitted = 0;
-
-        // consider avoiding the iterator allocation?
         Iterator<PriceChunk> chunkIt = bs.directory.iterator();
         while (chunkIt.hasNext()) {
             PriceChunk chunk = chunkIt.next();
@@ -261,6 +268,51 @@ public final class ChunkedOrderBook implements L3OrderBook {
                 if (++emitted >= limit) {
                     return emitted;
                 }
+            }
+        }
+        return emitted;
+    }
+
+    private int forEachLevelFromBest(BookSide bs, int limit, LevelConsumer consumer) {
+        if (!bs.hasBest()) {
+            return 0;
+        }
+        Side enumSide = bs.side;
+        long chunkId = bs.bestChunkId;
+        PriceChunk chunk = bs.directory.get(chunkId);
+        int offset = bs.bestOffset;
+        int emitted = 0;
+
+        while (offset != BitmapUtils.NOT_FOUND) {
+            consumer.onLevel(enumSide,
+                bs.priceTickOf(chunkId, offset),
+                chunk.orderCount[offset],
+                chunk.totalQty[offset]);
+            if (++emitted >= limit) {
+                return emitted;
+            }
+            offset = BitmapUtils.nextSetBit(
+                chunk.levelBitmap, offset + 1, PriceChunk.CHUNK_SIZE);
+        }
+        // Spill: best chunk had fewer than `limit` levels — walk remaining
+        // active chunks via iteratorFrom. Pays one iterator allocation, only
+        // when limit > nonEmptyCount(bestChunk).
+        Iterator<PriceChunk> it = bs.directory.iteratorFrom(chunkId + 1);
+        while (it.hasNext()) {
+            chunk = it.next();
+            chunkId = chunk.chunkId;
+            offset = BitmapUtils.nextSetBit(
+                chunk.levelBitmap, 0, PriceChunk.CHUNK_SIZE);
+            while (offset != BitmapUtils.NOT_FOUND) {
+                consumer.onLevel(enumSide,
+                    bs.priceTickOf(chunkId, offset),
+                    chunk.orderCount[offset],
+                    chunk.totalQty[offset]);
+                if (++emitted >= limit) {
+                    return emitted;
+                }
+                offset = BitmapUtils.nextSetBit(
+                    chunk.levelBitmap, offset + 1, PriceChunk.CHUNK_SIZE);
             }
         }
         return emitted;
