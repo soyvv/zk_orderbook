@@ -9,14 +9,14 @@ src/main/java/com/zzk/orderbook/
     model/       Order, Side, PriceLevel, BookSnapshotLevel, PrecisionSpec, Trade,
                  TradeListener, MutableOrder, MutableLevel, LevelConsumer, OrderConsumer
     core/        L3OrderBook (interface)
-    core/impl/   TreeMapOrderBook (reference impl) + OrderIndex/HashMapOrderIndex
+    core/ref/    TreeMapOrderBook (reference impl) + OrderIndex/HashMapOrderIndex
     core/v1/     ChunkedOrderBook + ChunkedBookConfig + ChunkPool + ArrayChunkDirectory
                  + TreeMapChunkDirectory + OrderArena + PriceChunk + AgronaLongLongIndex
     precision/   PrecisionParser, PriceQtyConverter, PrecisionValidator (stubs)
-    perf/        CsvDatasetGenerator
+    perf/        CsvDatasetGenerator (see perf/README.md)
 src/test/java/com/zzk/orderbook/
     core/             RandomizedParityTest (cross-impl, ref vs each v1 variant)
-    core/impl/        TreeMapOrderBookTest, MatchingTest
+    core/ref/         TreeMapOrderBookTest, MatchingTest
     core/v1/          ChunkedOrderBookTest, ChunkedMatchingTest, ChunkPoolTest,
                       PriceChunkTest, ArrayChunkDirectoryTest, ChunkDirectoryTest,
                       OrderArenaTest, ChunkedOrderBookHotApiTest
@@ -66,62 +66,9 @@ options on the same command line (e.g. `-wi 2 -i 3 -f 1` for a quick smoke
 run, `-prof gc` for allocation profiling).
 
 To add a new dataset: generate it with `CsvDatasetGenerator` (see
-[Dataset Generation](#dataset-generation)), `zip` the three output files
-into `src/test/resources/datasets/<name>.zip`, then re-run with
-`-p dataset=<name>`.
-
-## Dataset Generation
-
-Build first:
-
-```
-mvn -DskipTests package
-```
-
-Generate event and trade CSVs using the reference `TreeMapOrderBook`:
-
-```
-java -cp target/classes com.zzk.orderbook.perf.CsvDatasetGenerator \
-  --profile small \
-  --dist clustered \
-  --seed 42 \
-  --add-rate 0.50 \
-  --update-rate 0.30 \
-  --remove-rate 0.20 \
-  --events-out data/generated/events.csv \
-  --trades-out data/generated/trades.csv \
-  --meta-out data/generated/meta.txt
-```
-
-By default, adds are passive and the trades CSV only contains its header. Add
-`--allow-crossing` to generate aggressive adds and trade rows from the reference
-matching logic.
-
-For a stream concentrated around top of book:
-
-```
-java -cp target/classes com.zzk.orderbook.perf.CsvDatasetGenerator \
-  --profile small \
-  --dist clustered \
-  --seed 42 \
-  --add-rate 0.90 \
-  --update-rate 0.30 \
-  --remove-rate 0.20 \
-  --price-anchor bbo \
-  --active-selection bbo \
-  --bbo-width-ticks 10 \
-  --bbo-select-width-ticks 50 \
-  --allow-crossing \
-  --cross-rate 0.12 \
-  --improve-quote-rate 0.25 \
-  --events-out data/generated/events.csv \
-  --trades-out data/generated/trades.csv \
-  --meta-out data/generated/meta.txt
-```
-
-`--price-anchor bbo` places new orders around the current best bid/offer.
-`--active-selection bbo` biases updates and cancels toward active orders near
-top of book.
+[`src/main/java/com/zzk/orderbook/perf/README.md`](src/main/java/com/zzk/orderbook/perf/README.md)
+for the generator CLI), `zip` the three output files into
+`src/test/resources/datasets/<name>.zip`, then re-run with `-p dataset=<name>`.
 
 ## Milestones
 

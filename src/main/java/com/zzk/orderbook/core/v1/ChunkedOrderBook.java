@@ -189,19 +189,15 @@ public final class ChunkedOrderBook implements L3OrderBook {
         Iterator<PriceChunk> chunkIt = bs.directory.iterator();
         while (chunkIt.hasNext()) {
             PriceChunk chunk = chunkIt.next();
-            for (int word = 0; word < PriceChunk.BITMAP_WORDS; word++) {
-                long w = chunk.levelBitmap[word];
-                while (w != 0L) {
-                    int bit = Long.numberOfTrailingZeros(w);
-                    w &= w - 1;
-                    int offset = (word << 6) + bit;
-                    if (rank++ == levelIndex) {
-                        out.side = bs.side;
-                        out.price = bs.priceTickOf(chunk.chunkId, offset);
-                        out.orderCount = chunk.orderCount[offset];
-                        out.totalQuantity = chunk.totalQty[offset];
-                        return true;
-                    }
+            for (int offset = BitmapUtils.nextSetBit(chunk.levelBitmap, 0, PriceChunk.CHUNK_SIZE);
+                 offset != BitmapUtils.NOT_FOUND;
+                 offset = BitmapUtils.nextSetBit(chunk.levelBitmap, offset + 1, PriceChunk.CHUNK_SIZE)) {
+                if (rank++ == levelIndex) {
+                    out.side = bs.side;
+                    out.price = bs.priceTickOf(chunk.chunkId, offset);
+                    out.orderCount = chunk.orderCount[offset];
+                    out.totalQuantity = chunk.totalQty[offset];
+                    return true;
                 }
             }
         }
@@ -214,17 +210,13 @@ public final class ChunkedOrderBook implements L3OrderBook {
         Iterator<PriceChunk> chunkIt = bs.directory.iterator();
         while (chunkIt.hasNext()) {
             PriceChunk chunk = chunkIt.next();
-            for (int word = 0; word < PriceChunk.BITMAP_WORDS; word++) {
-                long w = chunk.levelBitmap[word];
-                while (w != 0L) {
-                    int bit = Long.numberOfTrailingZeros(w);
-                    w &= w - 1;
-                    int offset = (word << 6) + bit;
-                    consumer.onLevel(bs.side,
-                        bs.priceTickOf(chunk.chunkId, offset),
-                        chunk.orderCount[offset],
-                        chunk.totalQty[offset]);
-                }
+            for (int offset = BitmapUtils.nextSetBit(chunk.levelBitmap, 0, PriceChunk.CHUNK_SIZE);
+                 offset != BitmapUtils.NOT_FOUND;
+                 offset = BitmapUtils.nextSetBit(chunk.levelBitmap, offset + 1, PriceChunk.CHUNK_SIZE)) {
+                consumer.onLevel(bs.side,
+                    bs.priceTickOf(chunk.chunkId, offset),
+                    chunk.orderCount[offset],
+                    chunk.totalQty[offset]);
             }
         }
     }
@@ -275,24 +267,20 @@ public final class ChunkedOrderBook implements L3OrderBook {
         Iterator<PriceChunk> chunkIt = bs.directory.iterator();
         while (chunkIt.hasNext()) {
             PriceChunk chunk = chunkIt.next();
-            for (int word = 0; word < PriceChunk.BITMAP_WORDS; word++) {
-                long w = chunk.levelBitmap[word];
-                while (w != 0L) {
-                    int bit = Long.numberOfTrailingZeros(w);
-                    w &= w - 1;
-                    int offset = (word << 6) + bit;
-                    if (kept < depth) {
-                        kept++;
-                        continue;
+            for (int offset = BitmapUtils.nextSetBit(chunk.levelBitmap, 0, PriceChunk.CHUNK_SIZE);
+                 offset != BitmapUtils.NOT_FOUND;
+                 offset = BitmapUtils.nextSetBit(chunk.levelBitmap, offset + 1, PriceChunk.CHUNK_SIZE)) {
+                if (kept < depth) {
+                    kept++;
+                    continue;
+                }
+                int slot = chunk.headOrder[offset];
+                while (slot != OrderArena.NULL) {
+                    if (nScratch == trimScratch.length) {
+                        trimScratch = Arrays.copyOf(trimScratch, nScratch * 2);
                     }
-                    int slot = chunk.headOrder[offset];
-                    while (slot != OrderArena.NULL) {
-                        if (nScratch == trimScratch.length) {
-                            trimScratch = Arrays.copyOf(trimScratch, nScratch * 2);
-                        }
-                        trimScratch[nScratch++] = slot;
-                        slot = arena.nextOrder[slot];
-                    }
+                    trimScratch[nScratch++] = slot;
+                    slot = arena.nextOrder[slot];
                 }
             }
         }

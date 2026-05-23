@@ -64,19 +64,15 @@ final class PriceChunk {
      * it becomes observable.
      */
     void clearActiveLevelsForRelease() {
-        for (int word = 0; word < BITMAP_WORDS; word++) {
-            long w = levelBitmap[word];
-            while (w != 0L) {
-                int bit = Long.numberOfTrailingZeros(w);
-                w &= w - 1;
-                int offset = (word << 6) + bit;
-                totalQty[offset] = 0L;
-                orderCount[offset] = 0;
-                headOrder[offset] = OrderArena.NULL;
-                tailOrder[offset] = OrderArena.NULL;
-            }
-            levelBitmap[word] = 0L;
+        for (int offset = BitmapUtils.nextSetBit(levelBitmap, 0, CHUNK_SIZE);
+             offset != BitmapUtils.NOT_FOUND;
+             offset = BitmapUtils.nextSetBit(levelBitmap, offset + 1, CHUNK_SIZE)) {
+            totalQty[offset] = 0L;
+            orderCount[offset] = 0;
+            headOrder[offset] = OrderArena.NULL;
+            tailOrder[offset] = OrderArena.NULL;
         }
+        BitmapUtils.clearAll(levelBitmap);
         nonEmptyCount = 0;
         bestOffset = OrderArena.NULL;
     }
@@ -91,12 +87,7 @@ final class PriceChunk {
         if (nonEmptyCount != 0 || bestOffset != OrderArena.NULL) {
             return false;
         }
-        for (int word = 0; word < BITMAP_WORDS; word++) {
-            if (levelBitmap[word] != 0L) {
-                return false;
-            }
-        }
-        return true;
+        return BitmapUtils.isEmpty(levelBitmap);
     }
 
     boolean isLevelSet(int offset) {
@@ -132,16 +123,7 @@ final class PriceChunk {
         if (start >= CHUNK_SIZE) {
             return OrderArena.NULL;
         }
-        int word = start >>> 6;
-        long w = levelBitmap[word] & (-1L << (start & 63));
-        if (w != 0L) {
-            return (word << 6) + Long.numberOfTrailingZeros(w);
-        }
-        for (int i = word + 1; i < BITMAP_WORDS; i++) {
-            if (levelBitmap[i] != 0L) {
-                return (i << 6) + Long.numberOfTrailingZeros(levelBitmap[i]);
-            }
-        }
-        return OrderArena.NULL;
+        int offset = BitmapUtils.nextSetBit(levelBitmap, start, CHUNK_SIZE);
+        return offset == BitmapUtils.NOT_FOUND ? OrderArena.NULL : offset;
     }
 }

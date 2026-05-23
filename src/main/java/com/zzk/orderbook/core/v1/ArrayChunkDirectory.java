@@ -126,17 +126,13 @@ final class ArrayChunkDirectory implements ChunkDirectory {
     public void reset() {
         // Forced-flush path: chunks may have live state. releaseClearing
         // calls clearActiveLevelsForRelease before pooling.
-        for (int word = 0; word < activeChunkBitmap.length; word++) {
-            long w = activeChunkBitmap[word];
-            while (w != 0L) {
-                int bit = Long.numberOfTrailingZeros(w);
-                w &= w - 1;
-                int idx = (word << 6) + bit;
-                chunkPool.releaseClearing(chunksByIndex[idx]);
-                chunksByIndex[idx] = null;
-            }
-            activeChunkBitmap[word] = 0L;
+        for (int idx = BitmapUtils.nextSetBit(activeChunkBitmap, 0, chunksByIndex.length);
+             idx != BitmapUtils.NOT_FOUND;
+             idx = BitmapUtils.nextSetBit(activeChunkBitmap, idx + 1, chunksByIndex.length)) {
+            chunkPool.releaseClearing(chunksByIndex[idx]);
+            chunksByIndex[idx] = null;
         }
+        BitmapUtils.clearAll(activeChunkBitmap);
         activeCount = 0;
         firstActiveIndex = FIRST_INVALID;
     }
@@ -178,21 +174,7 @@ final class ArrayChunkDirectory implements ChunkDirectory {
 
     /** Lowest set bit at or after {@code startIdx}, or {@link #FIRST_INVALID}. */
     private int scanFirstSet(int startIdx) {
-        if (startIdx >= chunksByIndex.length) {
-            return FIRST_INVALID;
-        }
-        int word = startIdx >>> 6;
-        long w = activeChunkBitmap[word] & (-1L << (startIdx & 63));
-        if (w != 0L) {
-            return (word << 6) + Long.numberOfTrailingZeros(w);
-        }
-        for (int i = word + 1; i < activeChunkBitmap.length; i++) {
-            if (activeChunkBitmap[i] != 0L) {
-                int candidate = (i << 6) + Long.numberOfTrailingZeros(activeChunkBitmap[i]);
-                return candidate < chunksByIndex.length ? candidate : FIRST_INVALID;
-            }
-        }
-        return FIRST_INVALID;
+        return BitmapUtils.nextSetBit(activeChunkBitmap, startIdx, chunksByIndex.length);
     }
 
     private final class BitmapIterator implements Iterator<PriceChunk> {
