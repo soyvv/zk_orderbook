@@ -1,0 +1,15 @@
+target/
+*.class
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# Local data + private docs
+data/
+docs/
+
+# Agent harness scratch
+.claude/
+AGENTS.md
+cp.txt
