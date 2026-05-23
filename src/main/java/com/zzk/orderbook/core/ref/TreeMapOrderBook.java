@@ -178,11 +178,29 @@ public final class TreeMapOrderBook implements L3OrderBook {
     }
 
     @Override
-    public void forEachLevel(Side side, LevelConsumer consumer) {
+    public int forEachLevel(Side side, int fromLevelInclusive, int limit, LevelConsumer consumer) {
+        if (fromLevelInclusive < 0) {
+            throw new IndexOutOfBoundsException("fromLevelInclusive < 0: " + fromLevelInclusive);
+        }
+        if (limit < 0) {
+            throw new IllegalArgumentException("limit < 0: " + limit);
+        }
+        if (limit == 0) {
+            return 0;
+        }
+        int rank = 0;
+        int emitted = 0;
         for (MutablePriceLevel level : bookFor(side).values()) {
+            if (rank++ < fromLevelInclusive) {
+                continue;
+            }
             consumer.onLevel(level.side(), level.price(),
                 level.orderCount(), level.totalQuantity());
+            if (++emitted >= limit) {
+                break;
+            }
         }
+        return emitted;
     }
 
     @Override

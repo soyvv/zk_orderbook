@@ -167,8 +167,34 @@ class RandomizedParityTest {
             assertEquals(ref.orderCount(), sub.orderCount(), "orderCount");
             assertSnapshotEquals(ref, sub, Side.BID);
             assertSnapshotEquals(ref, sub, Side.ASK);
+            // Range-API parity: drives both impls through forEachLevel(side, from, limit, ...)
+            // every op, catching divergence in the new chunk-skip path.
+            assertRangeMatches(ref, sub, Side.BID, 0, 5);
+            assertRangeMatches(ref, sub, Side.ASK, 0, 5);
         } catch (AssertionError e) {
             fail("op #" + seq + " " + op + ": " + e.getMessage());
+        }
+    }
+
+    private static void assertRangeMatches(L3OrderBook ref, L3OrderBook sub, Side side,
+                                           int from, int limit) {
+        ArrayList<long[]> refRows = new ArrayList<>();
+        ArrayList<long[]> subRows = new ArrayList<>();
+        int refEmitted = ref.forEachLevel(side, from, limit,
+            (s, p, c, q) -> refRows.add(new long[] { p, c, q }));
+        int subEmitted = sub.forEachLevel(side, from, limit,
+            (s, p, c, q) -> subRows.add(new long[] { p, c, q }));
+        if (refEmitted != subEmitted) {
+            fail(side + " range[" + from + ", " + limit + "] emitted: ref=" + refEmitted
+                + " sub=" + subEmitted);
+        }
+        for (int i = 0; i < refRows.size(); i++) {
+            long[] r = refRows.get(i);
+            long[] s = subRows.get(i);
+            if (r[0] != s[0] || r[1] != s[1] || r[2] != s[2]) {
+                fail(side + " range row[" + i + "]: ref=(p=" + r[0] + ",c=" + r[1] + ",q=" + r[2]
+                    + ") sub=(p=" + s[0] + ",c=" + s[1] + ",q=" + s[2] + ")");
+            }
         }
     }
 

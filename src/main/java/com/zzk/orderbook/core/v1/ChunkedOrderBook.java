@@ -224,20 +224,46 @@ public final class ChunkedOrderBook implements L3OrderBook {
     }
 
     @Override
-    public void forEachLevel(Side side, LevelConsumer consumer) {
+    public int forEachLevel(Side side, int fromLevelInclusive, int limit, LevelConsumer consumer) {
+        if (fromLevelInclusive < 0) {
+            throw new IndexOutOfBoundsException("fromLevelInclusive < 0: " + fromLevelInclusive);
+        }
+        if (limit < 0) {
+            throw new IllegalArgumentException("limit < 0: " + limit);
+        }
+        if (limit == 0) {
+            return 0;
+        }
         BookSide bs = sideFor(side);
+        int skipped = 0;
+        int emitted = 0;
+
+        // consider avoiding the iterator allocation?
         Iterator<PriceChunk> chunkIt = bs.directory.iterator();
         while (chunkIt.hasNext()) {
             PriceChunk chunk = chunkIt.next();
+            // Whole-chunk skip when every level here lands before `from`.
+            if (skipped + chunk.nonEmptyCount <= fromLevelInclusive) {
+                skipped += chunk.nonEmptyCount;
+                continue;
+            }
             for (int offset = BitmapUtils.nextSetBit(chunk.levelBitmap, 0, PriceChunk.CHUNK_SIZE);
                  offset != BitmapUtils.NOT_FOUND;
                  offset = BitmapUtils.nextSetBit(chunk.levelBitmap, offset + 1, PriceChunk.CHUNK_SIZE)) {
+                if (skipped < fromLevelInclusive) {
+                    skipped++;
+                    continue;
+                }
                 consumer.onLevel(bs.side,
                     bs.priceTickOf(chunk.chunkId, offset),
                     chunk.orderCount[offset],
                     chunk.totalQty[offset]);
+                if (++emitted >= limit) {
+                    return emitted;
+                }
             }
         }
+        return emitted;
     }
 
     @Override

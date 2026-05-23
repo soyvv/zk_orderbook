@@ -224,6 +224,8 @@ OrderArena
 
 `OrderArena` stores live orders in parallel primitive arrays. Each live order occupies one slot.
 
+This design follows the slot-map style commonly used in low-latency systems: store objects in stable integer slots, keep dense primitive arrays for hot fields, and pass compact handles instead of object references. A useful background reference for this pattern is the slot-map discussion at https://www.youtube.com/watch?v=SHaAR7XPtNU&t=36.
+
 Stored per slot:
 
 - external order id
@@ -317,10 +319,11 @@ Let:
 - `P` = active price levels on one side.
 - `C` = active chunks on one side.
 - `K` = requested level index.
+- `L` = number of levels requested by a top-K or range-level query.
 - `F` = fills caused by a crossing add.
 - `R` = orders removed by trim.
 
-Reference `TreeMapOrderBook`:
+Reference `TreeMapOrderBook` (for design reference):
 
 | Operation | Complexity |
 | --- | --- |
@@ -330,6 +333,8 @@ Reference `TreeMapOrderBook`:
 | Remove | O(1) average index + O(log P) if level is removed |
 | Get by exact price | O(log P) |
 | Get by level K | O(K) |
+| Get top L levels | O(L) |
+| Get level range from K, limit L | O(K + L) |
 | Iterate levels/orders | O(P + N) |
 | Trim depth | O(P + R) |
 
@@ -343,10 +348,12 @@ Chunked implementation with `TreeMapChunkDirectory`:
 | Remove | O(1) average index + O(log C) only if chunk is removed |
 | Get by exact price | O(log C) |
 | Get by level K | O(chunks traversed + set levels scanned to K) |
+| Get top L levels | O(chunks touched + L) |
+| Get level range from K, limit L | O(chunks traversed to K + set levels scanned to K + L) |
 | Iterate levels/orders | O(C + P + N) |
 | Trim depth | O(P beyond depth + R) |
 
-Chunked implementation with `ArrayChunkDirectory`:
+Chunked implementation with `ArrayChunkDirectory` (Optimized):
 
 | Operation | Complexity |
 | --- | --- |
@@ -356,8 +363,12 @@ Chunked implementation with `ArrayChunkDirectory`:
 | Remove | O(1) average index + O(1) unlink; best refresh may scan active chunk bitmap words |
 | Get by exact price | O(1) in configured range |
 | Get by level K | O(active chunk bitmap words traversed + set levels scanned to K) |
+| Get top L levels | O(active chunk bitmap words touched + L) |
+| Get level range from K, limit L | O(active chunk bitmap words traversed to K + set levels scanned to K + L) |
 | Iterate levels/orders | O(active chunk bitmap words + P + N) |
 | Trim depth | O(P beyond depth + R) |
+
+For the requirement's "levels 0..4" style query, the important operation is top-K/range retrieval, not repeated single-level lookup. Calling `getByLevel(side, i)` for each `i = 0..L-1` repeats the walk from best every time and costs roughly O(L^2) in the reference structure and O(repeated chunk scans + L^2) in the chunked structure. A dedicated top-level API should walk once from best and stop after `L` emitted levels, giving O(L) for the reference book and O(active chunk bitmap words touched + L) for the optimized chunked-array book.
 
 ### Low-Latency Analysis
 
@@ -377,6 +388,17 @@ The remaining predictable costs are:
 - bitmap scans when refreshing best after removing the current best level,
 - `getByLevel(k)` walking from best to rank `k`,
 - first-time scratch-buffer growth during large trims if it exceeds previous high-water mark.
+
+### Further Optimization Areas
+
+The current `v1-chunked-array` implementation already removes the dominant allocation and pointer-chasing costs from the reference design. The next improvements should be driven by workload measurements rather than added preemptively.
+
+Potential next steps:
+
+- Avoid iterator allocation in chunk traversal. `forEachLevel`, `getByLevel`, and `trimSide` currently go through `ChunkDirectory.iterator()`. A primitive callback traversal or package-private bitmap walk for `ArrayChunkDirectory` would remove small iterator allocations and simplify hot scans.
+- Pre-size trim scratch storage. `trimScratch` grows on demand. If trim is part of a latency-sensitive path, sizing it from `arenaCapacity` or a config value would make trim predictably allocation-free.
+- Validate `OrderIdIndex` sizing under peak-active workloads. The Agrona map is initialized from arena capacity, but allocation profiling should confirm no mid-run rehash for high-watermark datasets.
+- Make precision validation policy explicit at API boundaries. The hot book intentionally assumes normalized tick/lot integers; a checked wrapper could serve non-hot callers without adding validation cost to the engine core.
 
 ## 4. Performance Comparison
 
@@ -571,11 +593,3 @@ There is also a generic `InvariantChecker` test utility placeholder. It should e
 ## Conclusion
 
 The project satisfies the core L3 book requirements and adds a well-tested low-latency implementation. The reference implementation is simple and useful as an oracle. The optimized implementation improves throughput and allocation behavior by replacing object-heavy ordered maps with primitive arenas, chunked price ladders, bitmaps, and pooled chunks.
-
-The main remaining deliverable improvements are documentation polish and contract clarity:
-
-- state clearly that `add` includes price-time matching,
-- state clearly that precision validation is done at the boundary, not inside hot book mutations,
-- update stale README milestone text,
-- add final performance snapshots to docs,
-- complete or remove the generic invariant checker.

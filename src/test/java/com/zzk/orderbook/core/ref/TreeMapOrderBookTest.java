@@ -171,4 +171,42 @@ class TreeMapOrderBookTest {
         }
         return out;
     }
+
+    // --- Ranged forEachLevel(side, from, limit, consumer) --------------------
+
+    @Test
+    void forEachLevelRangeTopN() {
+        for (int i = 0; i < 5; i++) {
+            book.add(100 + i, Side.BID, 10_100L - i * 100L, 10L);
+        }
+        List<Long> prices = new ArrayList<>();
+        int emitted = book.forEachLevel(Side.BID, 0, 3,
+            (s, p, c, q) -> prices.add(p));
+        assertEquals(3, emitted);
+        assertEquals(List.of(10_100L, 10_000L, 9_900L), prices);
+    }
+
+    @Test
+    void forEachLevelRangeMiddleSlice() {
+        for (int i = 0; i < 5; i++) {
+            book.add(100 + i, Side.BID, 10_100L - i * 100L, 10L);
+        }
+        List<Long> prices = new ArrayList<>();
+        int emitted = book.forEachLevel(Side.BID, 2, 2,
+            (s, p, c, q) -> prices.add(p));
+        assertEquals(2, emitted);
+        assertEquals(List.of(9_900L, 9_800L), prices);
+    }
+
+    @Test
+    void forEachLevelRangeOverflowsAvailable() {
+        for (int i = 0; i < 5; i++) {
+            book.add(100 + i, Side.BID, 10_100L - i * 100L, 10L);
+        }
+        List<Long> prices = new ArrayList<>();
+        int emitted = book.forEachLevel(Side.BID, 0, 100,
+            (s, p, c, q) -> prices.add(p));
+        assertEquals(5, emitted);
+        assertEquals(5, prices.size());
+    }
 }

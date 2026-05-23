@@ -85,8 +85,27 @@ public interface L3OrderBook {
     /** Populate {@code out} with the level at rank {@code levelIndex}; return false if past end. */
     boolean getByLevel(Side side, int levelIndex, MutableLevel out);
 
-    /** Walk all levels on {@code side} best-to-worst, calling {@code consumer} per level. */
-    void forEachLevel(Side side, LevelConsumer consumer);
+    /**
+     * Walk levels best-to-worst on {@code side}, skipping the first
+     * {@code fromLevelInclusive} and emitting at most {@code limit} to
+     * {@code consumer}. Returns the number actually emitted — can be less
+     * than {@code limit} if the side has fewer than {@code from + limit}
+     * levels.
+     *
+     * <p>This is the requirement-facing top-N / range query: for "top 5"
+     * call {@code forEachLevel(side, 0, 5, consumer)} — one traversal, not
+     * five {@link #getByLevel(Side, int, MutableLevel)} calls each restarting
+     * from best.
+     *
+     * @throws IndexOutOfBoundsException if {@code fromLevelInclusive < 0}
+     * @throws IllegalArgumentException  if {@code limit < 0}
+     */
+    int forEachLevel(Side side, int fromLevelInclusive, int limit, LevelConsumer consumer);
+
+    /** Walk every level on {@code side} best-to-worst. Convenience for the unbounded case. */
+    default void forEachLevel(Side side, LevelConsumer consumer) {
+        forEachLevel(side, 0, Integer.MAX_VALUE, consumer);
+    }
 
     /** Walk FIFO orders at {@code price} on {@code side}; return false if no such level. */
     boolean forEachOrderAtPrice(Side side, long price, OrderConsumer consumer);
@@ -120,6 +139,18 @@ public interface L3OrderBook {
     default Iterable<BookSnapshotLevel> snapshot(Side side) {
         ArrayList<BookSnapshotLevel> out = new ArrayList<>();
         forEachLevel(side, (s, p, c, q) -> out.add(new BookSnapshotLevel(s, p, c, q)));
+        return out;
+    }
+
+    /**
+     * Materialized slice of levels {@code [fromLevelInclusive, fromLevelInclusive + limit)}
+     * on {@code side} as {@link BookSnapshotLevel} aggregates. Built atop the
+     * ranged {@link #forEachLevel(Side, int, int, LevelConsumer)}.
+     */
+    default List<BookSnapshotLevel> getLevels(Side side, int fromLevelInclusive, int limit) {
+        ArrayList<BookSnapshotLevel> out = new ArrayList<>(Math.max(0, limit));
+        forEachLevel(side, fromLevelInclusive, limit,
+            (s, p, c, q) -> out.add(new BookSnapshotLevel(s, p, c, q)));
         return out;
     }
 
