@@ -196,6 +196,23 @@ Main trade-offs:
 
 `ChunkedOrderBook` keeps the same public behavior but changes the internal representation.
 
+The core idea is to turn price lookup into array indexing. Instead of storing every price level as an object inside an ordered tree, the optimized book maps each normalized price tick to a logical integer index. That logical index is split into two parts:
+
+```text
+logical price index -> chunk id + offset inside chunk
+```
+
+The first level of indexing is the chunk directory, which locates the `PriceChunk` for a range of 4096 price ticks. The second level is direct array access inside that chunk. This gives fast exact-price lookup while keeping memory bounded: the book only allocates chunks for active price regions rather than one giant array for the whole possible price space.
+
+Orders themselves do not live as Java objects in each level. They live in `OrderArena`, a slot-map style allocator backed by primitive arrays. A level's FIFO queue stores integer slot ids for head/tail and per-order prev/next links. This keeps hot order state dense and cache-friendly, makes allocation/free simple, and avoids per-order object churn.
+
+The optimized path also removes common Java overhead from hot mutation/query paths:
+
+- `ChunkPool` recycles `PriceChunk` instances instead of allocating new chunks during book operation.
+- `AgronaLongLongIndex` maps external order id to arena handle using primitive `long -> long` storage, avoiding boxed `Long` keys and values.
+- Per-chunk bitmaps mark non-empty price offsets, so best-level and next-level scans skip empty offsets with word-level bit operations.
+- Aggregate level state (`orderCount`, `totalQty`, FIFO head/tail) is stored in primitive arrays, so queries can emit level summaries without materializing snapshot objects.
+
 High-level structure:
 
 ```text
@@ -393,16 +410,6 @@ The remaining predictable costs are:
 - `getByLevel(k)` walking from best to rank `k`,
 - first-time scratch-buffer growth during large trims if it exceeds previous high-water mark.
 
-### Further Optimization Areas
-
-The current `v1-chunked-array` implementation already removes the dominant allocation and pointer-chasing costs from the reference design. The next improvements should be driven by workload measurements rather than added preemptively.
-
-Potential next steps:
-
-- Avoid iterator allocation in chunk traversal. `forEachLevel`, `getByLevel`, and `trimSide` currently go through `ChunkDirectory.iterator()`. A primitive callback traversal or package-private bitmap walk for `ArrayChunkDirectory` would remove small iterator allocations and simplify hot scans.
-- Pre-size trim scratch storage. `trimScratch` grows on demand. If trim is part of a latency-sensitive path, sizing it from `arenaCapacity` or a config value would make trim predictably allocation-free.
-- Validate `OrderIdIndex` sizing under peak-active workloads. The Agrona map is initialized from arena capacity, but allocation profiling should confirm no mid-run rehash for high-watermark datasets.
-- Make precision validation policy explicit at API boundaries. The hot book intentionally assumes normalized tick/lot integers; a checked wrapper could serve non-hot callers without adding validation cost to the engine core.
 
 ## 4. Performance Comparison
 
@@ -625,3 +632,19 @@ There is also a generic `InvariantChecker` test utility placeholder. It should e
 ## Conclusion
 
 The project satisfies the core L3 book requirements and adds a well-tested low-latency implementation. The reference implementation is simple and useful as an oracle. The optimized implementation improves throughput and allocation behavior by replacing object-heavy ordered maps with primitive arenas, chunked price ladders, bitmaps, and pooled chunks.
+
+
+### Further Optimization Areas
+
+The current optimized path is strongest on mutation-heavy replay workloads and now performs well for top-N query snapshots. Future work should focus on preserving those wins while reducing special-case complexity and hard construction-time assumptions.
+
+Potential next steps:
+
+- Strengthen read-side optimization. The hot query APIs already avoid materialized snapshot objects, and the top-N path now wins most measured query cases. The next step is to make read paths consistently zero-allocation by avoiding iterator allocation in chunk traversal and by keeping reusable query consumers or caller-owned output buffers for common snapshot workflows.
+- Add small read caches for common queries. Many market-data consumers repeatedly ask for best bid/ask, L5, or L10. A per-side top-N cache could make those reads nearly a copy/emit operation. The trade-off is mutation complexity: add/remove/update must invalidate or update the cache precisely, so this should only be added if query rate dominates mutation rate.
+- Simplify the data structure where possible. The current design has both `TreeMapChunkDirectory` and `ArrayChunkDirectory`, plus chunk pooling and arena slot management. That is useful for comparison and benchmarking, but a production-focused version could hide or remove less-used variants behind a smaller factory/API surface.
+- Make chunk size configurable only if benchmarks justify it. `PriceChunk.CHUNK_SIZE = 4096` is a reasonable default: the bitmap is 64 longs and offset math is cheap. Smaller chunks may reduce cold memory touched for sparse books; larger chunks may improve locality for dense price bands. This should be driven by query and replay benchmarks across different price distributions.
+- Improve behavior when static sizing assumptions are wrong. The array-backed implementation assumes configured price range, chunk pool capacity, and arena capacity are sufficient. Today it fails fast when those bounds are exceeded, which is good for catching bad sizing. A safer production mode could fall back to a slower dynamic directory, grow selected pools, or expose clear sizing diagnostics before starting the book.
+- Pre-size trim scratch storage if trim is latency-sensitive. `trimScratch` grows on demand. If depth trimming is expected on a hot path, sizing it from `arenaCapacity` or a dedicated config value would make trim predictably allocation-free.
+- Validate `OrderIdIndex` sizing under peak-active workloads. The Agrona map is initialized from arena capacity, but allocation profiling should confirm no mid-run rehash for high-watermark datasets.
+- Make precision validation policy explicit at API boundaries. The hot book intentionally assumes normalized tick/lot integers. A checked wrapper could serve non-hot callers without adding validation cost to the engine core.
