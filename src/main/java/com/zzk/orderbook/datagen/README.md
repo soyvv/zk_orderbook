@@ -1,4 +1,4 @@
-# `com.zzk.orderbook.perf` — offline dataset generation
+# `com.zzk.orderbook.datagen` — offline dataset generation
 
 `CsvDatasetGenerator` produces deterministic event streams used by
 `BookReplayBenchmark` (see [src/jmh/java/.../BookReplayBenchmark.java](../../../../../../jmh/java/com/zzk/orderbook/perf/BookReplayBenchmark.java)).
@@ -25,7 +25,7 @@ mvn -DskipTests package
 Generate a small clustered passive-only stream:
 
 ```
-java -cp target/classes com.zzk.orderbook.perf.CsvDatasetGenerator \
+java -cp target/classes com.zzk.orderbook.datagen.CsvDatasetGenerator \
   --profile small \
   --dist clustered \
   --seed 42 \
@@ -44,7 +44,7 @@ reference matching logic.
 A stream concentrated around top-of-book with crossings:
 
 ```
-java -cp target/classes com.zzk.orderbook.perf.CsvDatasetGenerator \
+java -cp target/classes com.zzk.orderbook.datagen.CsvDatasetGenerator \
   --profile small \
   --dist clustered \
   --seed 42 \

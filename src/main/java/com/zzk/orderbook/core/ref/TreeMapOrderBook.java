@@ -4,18 +4,15 @@ import com.zzk.orderbook.core.L3OrderBook;
 import com.zzk.orderbook.model.LevelConsumer;
 import com.zzk.orderbook.model.MutableLevel;
 import com.zzk.orderbook.model.MutableOrder;
+import com.zzk.orderbook.model.MutablePriceLevel;
 import com.zzk.orderbook.model.Order;
 import com.zzk.orderbook.model.OrderConsumer;
 import com.zzk.orderbook.model.PrecisionSpec;
-import com.zzk.orderbook.model.PriceLevel;
 import com.zzk.orderbook.model.Side;
 import com.zzk.orderbook.model.TradeListener;
 
-import java.util.Collection;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.Iterator;
-import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.Objects;
@@ -82,7 +79,7 @@ public final class TreeMapOrderBook implements L3OrderBook {
                 } else {
                     maker.setQuantity(maker.quantity() - fillQty);
                 }
-                level.totalQuantity -= fillQty;
+                level.addToTotalQuantity(-fillQty);
                 remaining -= fillQty;
             }
 
@@ -244,71 +241,4 @@ public final class TreeMapOrderBook implements L3OrderBook {
         return removed;
     }
 
-    /** Internal mutable price level. Exposed only as the read-only {@link PriceLevel} view. */
-    private static final class MutablePriceLevel implements PriceLevel {
-
-        private final long price;
-        private final Side side;
-        private final LinkedHashMap<Long, Order> orders = new LinkedHashMap<>();
-        private long totalQuantity;
-
-        MutablePriceLevel(long price, Side side) {
-            this.price = price;
-            this.side = side;
-        }
-
-        @Override
-        public long price() {
-            return price;
-        }
-
-        @Override
-        public Side side() {
-            return side;
-        }
-
-        @Override
-        public int orderCount() {
-            return orders.size();
-        }
-
-        @Override
-        public long totalQuantity() {
-            return totalQuantity;
-        }
-
-        @Override
-        public Collection<Order> orders() {
-            return Collections.unmodifiableCollection(orders.values());
-        }
-
-        LinkedHashMap<Long, Order> orderMap() {
-            return orders;
-        }
-
-        void addOrder(Order order) {
-            orders.put(order.orderId(), order);
-            totalQuantity += order.quantity();
-        }
-
-        void removeOrder(long orderId) {
-            Order removed = orders.remove(orderId);
-            if (removed != null) {
-                totalQuantity -= removed.quantity();
-            }
-        }
-
-        void updateQuantity(long orderId, long newQuantity) {
-            Order o = orders.get(orderId);
-            if (o == null) {
-                throw new IllegalStateException("order missing from level: " + orderId);
-            }
-            totalQuantity += newQuantity - o.quantity();
-            o.setQuantity(newQuantity);
-        }
-
-        boolean isEmpty() {
-            return orders.isEmpty();
-        }
-    }
 }

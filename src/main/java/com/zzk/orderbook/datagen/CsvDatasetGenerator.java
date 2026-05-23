@@ -1,4 +1,4 @@
-package com.zzk.orderbook.perf;
+package com.zzk.orderbook.datagen;
 
 import com.zzk.orderbook.core.L3OrderBook;
 import com.zzk.orderbook.core.ref.TreeMapOrderBook;
@@ -657,7 +657,7 @@ public final class CsvDatasetGenerator {
         private static void printUsageAndExit(int code) {
             System.out.println("""
                     Usage:
-                      java -cp target/classes com.zzk.orderbook.perf.CsvDatasetGenerator \\
+                      java -cp target/classes com.zzk.orderbook.datagen.CsvDatasetGenerator \\
                         --events-out data/generated/events.csv \\
                         --trades-out data/generated/trades.csv \\
                         [--meta-out data/generated/meta.txt] \\
