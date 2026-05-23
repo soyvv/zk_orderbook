@@ -21,19 +21,59 @@ final class PriceChunk {
     static final int CHUNK_MASK = CHUNK_SIZE - 1;
     static final int BITMAP_WORDS = CHUNK_SIZE / Long.SIZE;
 
+    /**
+     * Logical chunk id this chunk currently represents. Mutable because
+     * {@link ChunkPool} recycles instances: a chunk's id is overwritten by
+     * {@link #resetForAcquire} when the pool hands it out again.
+     */
     long chunkId;
+    /** Sum of resting quantity per offset (price level). Maintained incrementally on add/remove/update. */
     final long[] totalQty = new long[CHUNK_SIZE];
+    /** Number of resting orders per offset. {@code 0} ↔ level is empty (and bitmap bit is clear). */
     final int[] orderCount = new int[CHUNK_SIZE];
+    /** Head (oldest) arena slot of the FIFO queue at each offset, or {@link OrderArena#NULL}. */
     final int[] headOrder = new int[CHUNK_SIZE];
+    /** Tail (newest) arena slot of the FIFO queue at each offset, or {@link OrderArena#NULL}. */
     final int[] tailOrder = new int[CHUNK_SIZE];
+    /**
+     * Bitmap of which offsets are currently non-empty: bit {@code o} in word
+     * {@code o >>> 6} is set iff {@code orderCount[o] > 0}. Lets best-offset
+     * lookup walk 64-long words with {@link Long#numberOfTrailingZeros}
+     * instead of scanning the full 4096-slot {@link #orderCount}.
+     */
     final long[] levelBitmap = new long[BITMAP_WORDS];
 
+    /**
+     * Number of set bits in {@link #levelBitmap}. Tracked separately so
+     * {@link ArrayChunkDirectory} can cheaply decide "drop the chunk" when it
+     * drops to zero, without re-counting the bitmap.
+     */
     int nonEmptyCount;
+    /**
+     * Lowest set offset in {@link #levelBitmap}, cached so the side's
+     * best-price lookup avoids the bitmap scan on the common case where the
+     * best level hasn't changed. {@link OrderArena#NULL} when chunk is empty.
+     */
     int bestOffset = OrderArena.NULL;
 
     // Pool bookkeeping — mutated only by ChunkPool.
+    /**
+     * Index of this chunk in its owning {@link ChunkPool#chunks} array.
+     * Stamped at pool construction, immutable afterwards. {@code -1} for
+     * unpooled chunks (e.g. those created by {@link TreeMapChunkDirectory}).
+     */
     int poolSlot = -1;
+    /**
+     * Reference to the owning pool, or {@code null} if unpooled. Used by
+     * {@link ChunkPool#releaseClean}/{@link ChunkPool#releaseClearing} to
+     * reject foreign chunks.
+     */
     ChunkPool poolOwner;
+    /**
+     * {@code true} while the chunk is on the pool's free stack, {@code false}
+     * while it's live in a directory. The pool toggles this to detect
+     * double-release and release-while-active.
+     */
     boolean inPool;
 
     PriceChunk(long chunkId) {

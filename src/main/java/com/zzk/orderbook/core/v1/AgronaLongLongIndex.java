@@ -11,6 +11,12 @@ import org.agrona.collections.Long2LongHashMap;
  */
 final class AgronaLongLongIndex implements OrderIdIndex {
 
+    /**
+     * Global orderId → arena handle map. The handle packs
+     * {@code (generation << 32) | slot} so a single primitive long carries
+     * everything needed to locate the order in {@link OrderArena} and detect
+     * stale references after slot reuse.
+     */
     private final Long2LongHashMap map;
 
     AgronaLongLongIndex(int initialCapacity, float loadFactor) {

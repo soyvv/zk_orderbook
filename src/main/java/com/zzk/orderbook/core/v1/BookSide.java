@@ -16,17 +16,47 @@ import static com.zzk.orderbook.core.v1.PriceChunk.CHUNK_MASK;
  */
 final class BookSide {
 
+    /** Sentinel for "no chunk cached" — used in {@link #bestChunkId} when the side is empty. */
     static final long NO_CHUNK = Long.MIN_VALUE;
 
+    /** Which side this is (BID or ASK). Exposed as the enum for {@link OrderConsumer}/{@link LevelConsumer} callbacks. */
     final Side side;
+    /**
+     * Single-byte side tag stored in {@link OrderArena#side}: {@code 'B'} for
+     * BID, {@code 'A'} for ASK. Lets the arena tag each slot cheaply without
+     * carrying a Side reference.
+     */
     final byte sideTag;
+    /**
+     * {@code true} for BID (logical index decreases with price), {@code false}
+     * for ASK (logical index increases with price). Controls the direction of
+     * the {@link #logicalIdxOf}/{@link #priceTickOf} transforms.
+     */
     private final boolean reversed;
+    /**
+     * Anchor for the logical-index transform: {@code askOriginTick} for the
+     * ASK side, {@code bidMaxTick} for the BID side. See
+     * {@link ChunkedBookConfig} for how the two anchors define the
+     * representable price range.
+     */
     private final long anchorTick;
 
+    /**
+     * Per-side chunk directory (one of {@link TreeMapChunkDirectory} or
+     * {@link ArrayChunkDirectory}). Injected at construction so impl variants
+     * can be swapped without touching {@link BookSide}.
+     */
     final ChunkDirectory directory;
 
+    /** Cached best chunk id; {@link #NO_CHUNK} iff the side is empty. */
     long bestChunkId = NO_CHUNK;
+    /** Cached best offset within {@link #bestChunkId}; {@link OrderArena#NULL} iff the side is empty. */
     int bestOffset = OrderArena.NULL;
+    /**
+     * Number of non-empty price levels on this side. Maintained incrementally
+     * by {@link #appendOrder} / {@link #removeOrder} so {@link #depth} is O(1)
+     * — avoids summing per-chunk {@code nonEmptyCount} on every query.
+     */
     private int depthCount;
 
     BookSide(Side side, long anchorTick, boolean reversed, ChunkDirectory directory) {

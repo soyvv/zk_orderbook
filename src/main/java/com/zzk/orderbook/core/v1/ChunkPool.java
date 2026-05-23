@@ -33,8 +33,21 @@ package com.zzk.orderbook.core.v1;
  */
 final class ChunkPool {
 
+    /**
+     * Every {@link PriceChunk} instance owned by this pool, pre-allocated at
+     * construction. Slot index in this array is stable for the lifetime of
+     * the pool and matches {@link PriceChunk#poolSlot}, so release can push
+     * back without a lookup.
+     */
     private final PriceChunk[] chunks;
+    /**
+     * LIFO stack of free-slot indices into {@link #chunks}. {@code freeStack[0
+     * .. freeSize-1]} are currently free; {@link #acquire} pops from the top,
+     * {@link #releaseClean}/{@link #releaseClearing} push. LIFO keeps the
+     * most-recently-released chunk hot in cache for the next acquire.
+     */
     private final int[] freeStack;
+    /** Number of free slots currently on {@link #freeStack}. {@code 0} means the pool is exhausted. */
     private int freeSize;
 
     ChunkPool(int capacity) {

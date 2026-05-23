@@ -13,6 +13,15 @@ final class BitmapUtils {
     private BitmapUtils() {
     }
 
+    /**
+     * Lowest set bit index in {@code words} at or after {@code fromBit},
+     * stopping at {@code bitLimit} (exclusive). Returns {@link #NOT_FOUND}
+     * if no bit in {@code [fromBit, bitLimit)} is set.
+     *
+     * <p>Uses {@link Long#numberOfTrailingZeros} per word so each word is
+     * scanned in a single intrinsic instruction; words past the first hit
+     * are skipped entirely when zero. Allocation-free.
+     */
     static int nextSetBit(long[] words, int fromBit, int bitLimit) {
         if (fromBit >= bitLimit) {
             return NOT_FOUND;

@@ -6,6 +6,13 @@ import java.util.TreeMap;
 /** Default {@link ChunkDirectory}: {@link TreeMap}-backed, O(log P) per op. */
 final class TreeMapChunkDirectory implements ChunkDirectory {
 
+    /**
+     * Sparse {@code chunkId → PriceChunk} map ordered by ascending chunk id
+     * (smallest = best on the side, after {@link BookSide}'s logical-index
+     * transform). Grows on demand, so memory tracks the actual non-empty
+     * chunk range rather than a preallocated window. Iteration / firstEntry
+     * give the best-to-worst walk used by {@link ChunkedOrderBook}.
+     */
     private final TreeMap<Long, PriceChunk> chunks = new TreeMap<>();
 
     @Override

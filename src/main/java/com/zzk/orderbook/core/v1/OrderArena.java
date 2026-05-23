@@ -15,17 +15,34 @@ final class OrderArena {
 
     private final int capacity;
 
+    /** External order id supplied by the caller (e.g. exchange-assigned id). */
     final long[] orderId;
+    /** Resting price in scaled-long form (same scale as {@link com.zzk.orderbook.model.PrecisionSpec#priceTick()}). */
     final long[] priceTick;
+    /** Remaining quantity in scaled-long form. Mutated in place on partial fills and updates. */
     final long[] qty;
+    /** Owning chunk on this side's ladder; lets the book find the level without walking the directory. */
     final long[] chunkId;
+    /** Owning offset within the chunk (0..{@link PriceChunk#CHUNK_SIZE}-1). */
     final int[] offset;
+    /** Intrusive FIFO: previous slot at the same price level, or {@link #NULL} if head. */
     final int[] prevOrder;
+    /** Intrusive FIFO: next slot at the same price level, or {@link #NULL} if tail.
+     *  Doubles as the free-list link while a slot is unallocated. */
     final int[] nextOrder;
+    /** Side tag of the resting order: {@code 'B'} or {@code 'A'}, matching {@link BookSide#sideTag}. */
     final byte[] side;
+    /**
+     * Slot reuse counter. Incremented each time the slot is freed; combined
+     * with the slot index into a packed handle so a stale handle (one that
+     * pointed at the slot before reuse) is detectable: see {@link #handleOf}
+     * and {@link #isLive}.
+     */
     final int[] generation;
 
+    /** Head of the singly-linked free-list threaded through {@link #nextOrder}; {@link #NULL} when full. */
     private int freeHead;
+    /** Number of currently-allocated slots; mirror of "non-free count" for cheap O(1) {@link #liveCount()}. */
     private int liveCount;
 
     OrderArena(int capacity) {
@@ -102,6 +119,13 @@ final class OrderArena {
         liveCount--;
     }
 
+    /**
+     * Pack the slot's current generation + slot index into a single
+     * {@code long} handle. Layout: high 32 bits = generation, low 32 bits =
+     * slot index. The packed value is what's stored in the
+     * {@link OrderIdIndex} so a single long-keyed lookup yields both the
+     * arena coordinates and the staleness check ({@link #isLive}).
+     */
     long handleOf(int slot) {
         return ((long) generation[slot] << 32) | (slot & 0xffffffffL);
     }

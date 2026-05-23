@@ -27,12 +27,31 @@ import java.util.Objects;
 public final class ChunkedOrderBook implements L3OrderBook {
 
     private final ChunkedBookConfig config;
+    /**
+     * Single pool of order slots shared by both sides. Stores the per-order
+     * primitives (id, price, qty, FIFO links, side tag, generation) so the
+     * book never allocates an {@code Order} on add/update/remove. Slot
+     * indices are packed with a generation into the handles stored in
+     * {@link #idIndex}.
+     */
     private final OrderArena arena;
+    /**
+     * External {@code orderId → arena handle} index. Lookup-by-id is the
+     * entry point for update/remove/cancel; the packed handle yields both
+     * the arena slot and a generation check for stale references.
+     */
     private final OrderIdIndex idIndex;
     private final BookSide bidSide;
     private final BookSide askSide;
 
-    /** Reusable scratch buffer for {@link #trimSide}; grows on demand. */
+    /**
+     * Reusable scratch buffer for {@link #trimSide}: holds arena slot
+     * indices of orders queued for removal after the bitmap walk identifies
+     * levels beyond the trim depth. Grows via {@link Arrays#copyOf} only on
+     * the first call that exceeds the previous high-water mark, so steady-
+     * state trim is allocation-free (no per-call {@code ArrayList<Integer>}
+     * + boxing).
+     */
     private int[] trimScratch = new int[64];
 
     public ChunkedOrderBook(ChunkedBookConfig config) {

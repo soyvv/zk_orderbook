@@ -20,13 +20,29 @@ final class ArrayChunkDirectory implements ChunkDirectory {
 
     private static final int FIRST_INVALID = -1;
 
+    /** Lowest chunk id this directory accepts (inclusive); maps to array index 0. */
     private final int minChunkId;
+    /** Highest chunk id this directory accepts (inclusive); maps to array index {@code chunksByIndex.length - 1}. */
     private final int maxChunkId;
+    /** {@code chunkId - minChunkId → PriceChunk}; null slot means the chunk is not active. */
     private final PriceChunk[] chunksByIndex;
+    /**
+     * Bitmap mirror of {@link #chunksByIndex}: bit {@code idx} is set iff
+     * {@code chunksByIndex[idx] != null}. Walked by {@link BitmapUtils} for
+     * best-to-worst iteration without scanning every null slot, which matters
+     * when the active chunk set is sparse within a wide configured range.
+     */
     private final long[] activeChunkBitmap;
+    /** Pre-allocated pool of {@link PriceChunk} instances; acquire on first-touch, release on empty. */
     private final ChunkPool chunkPool;
 
+    /** Number of non-null entries in {@link #chunksByIndex}; mirror of the bitmap's popcount, kept incrementally. */
     private int activeCount;
+    /**
+     * Cached lowest active array index, or {@link #FIRST_INVALID} if unknown
+     * / empty. Invalidated when its slot is removed; lazily rescanned via
+     * {@link #scanFirstSet} the next time {@link #firstChunk} is called.
+     */
     private int firstActiveIndex = FIRST_INVALID;
 
     ArrayChunkDirectory(int minChunkId, int maxChunkId, ChunkPool chunkPool) {

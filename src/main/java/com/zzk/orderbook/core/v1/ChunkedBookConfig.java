@@ -12,9 +12,34 @@ import java.util.Objects;
  * {@code minChunkId}, {@code maxChunkId}, and {@code chunkPoolCapacity} are
  * only validated and consumed when {@code directoryKind == ARRAY}.
  *
- * <p>{@code askOriginTick} anchors the ask side's logical-index 0 (lowest
- * representable ask), and {@code bidMaxTick} anchors the bid side's
- * logical-index 0 (highest representable bid).
+ * <p>Field semantics:
+ * <ul>
+ *   <li>{@code precisionSpec} — per-instrument tick/step + scale; passed through
+ *       to {@link L3OrderBook#precisionSpec()}. Validation against these
+ *       values is the caller's responsibility (see {@link PrecisionUtils}).</li>
+ *   <li>{@code askOriginTick} — lowest representable ask price (as a scaled
+ *       long). Anchors the ask side's logical-index 0; prices below this map
+ *       to a negative logical index and are rejected.</li>
+ *   <li>{@code bidMaxTick} — highest representable bid price (scaled long).
+ *       Anchors the bid side's logical-index 0 with {@code logicalIdx =
+ *       bidMaxTick - priceTick}, so the inequality {@code askOriginTick <
+ *       bidMaxTick} is required.</li>
+ *   <li>{@code arenaCapacity} — fixed upper bound on concurrently-live orders
+ *       across both sides. Sizes the primitive arrays inside {@link OrderArena}
+ *       and the initial capacity of {@link OrderIdIndex}; running over this
+ *       cap throws {@code "arena full"}.</li>
+ *   <li>{@code directoryKind} — selects {@link TreeMapChunkDirectory} (sparse,
+ *       grows on demand, O(log P) directory ops) or {@link ArrayChunkDirectory}
+ *       (bounded, O(1) lookup, allocation-free hot path).</li>
+ *   <li>{@code minChunkId} — lowest chunk id the array directory accepts.
+ *       Below this throws on add. <em>ARRAY only.</em></li>
+ *   <li>{@code maxChunkId} — highest chunk id the array directory accepts.
+ *       Sets the size of the directory's backing array
+ *       ({@code maxChunkId - minChunkId + 1}). <em>ARRAY only.</em></li>
+ *   <li>{@code chunkPoolCapacity} — number of {@link PriceChunk} instances
+ *       pre-allocated in the pool; must be {@code <= maxChunkId - minChunkId
+ *       + 1}. Exhausting it throws {@code "chunk pool full"}. <em>ARRAY only.</em></li>
+ * </ul>
  */
 public record ChunkedBookConfig(
         PrecisionSpec precisionSpec,
