@@ -27,29 +27,24 @@ import org.openjdk.jmh.runner.options.CommandLineOptions;
 import org.openjdk.jmh.runner.options.Options;
 import org.openjdk.jmh.runner.options.OptionsBuilder;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 
 /**
  * Replays a CSV event stream against any {@link L3OrderBook} implementation
- * and reports per-replay wall time. The dataset is a zip file packaged as a
- * classpath resource at {@code /datasets/<name>.zip} containing
- * {@code events.csv}, {@code trades.csv}, and an optional {@code meta.txt}.
+ * and reports per-replay wall time. Dataset I/O and parsing live in
+ * {@link DataSetUtils}; this class focuses on the JMH machinery, the hot
+ * replay loop, and the per-run summary writer.
  *
  * <p>Configured via:
  * <ul>
@@ -71,7 +66,6 @@ public class BookReplayBenchmark {
 
     private static final long PRICE_MARGIN_TICKS = 256L;
     private static final int ARENA_MARGIN = 64;
-    private static final String DATASET_RESOURCE_PREFIX = "/datasets/";
 
     @Param({"10k_p01_cross_off"})
     public String dataset;
@@ -79,7 +73,8 @@ public class BookReplayBenchmark {
     @Param({"treemap", "v1-chunked", "v1-chunked-array"})
     public String impl;
 
-    // Event stream in primitive form.
+    // Event stream in primitive form — copied from a DataSetUtils.EventStream
+    // at trial setup so the @Benchmark loop reads single-deref instance fields.
     private byte[] ops;
     private byte[] sides;
     private long[] orderIds;
@@ -97,12 +92,19 @@ public class BookReplayBenchmark {
 
     @Setup(Level.Trial)
     public void loadAndValidate() throws IOException {
-        Map<String, List<String>> entries = loadDatasetEntries(dataset);
-        Map<String, String> meta = readMeta(entries.getOrDefault("meta.txt", List.of()));
-        spec = precisionSpecFromMeta(meta);
+        Map<String, List<String>> entries = DataSetUtils.loadDatasetEntries(dataset);
+        Map<String, String> meta = DataSetUtils.readMeta(entries.getOrDefault("meta.txt", List.of()));
+        spec = DataSetUtils.precisionSpecFromMeta(meta);
 
-        loadEvents(entries.get("events.csv"));
-        List<Trade> expected = loadExpectedTrades(entries.get("trades.csv"));
+        DataSetUtils.EventStream events = DataSetUtils.loadEvents(entries.get("events.csv"));
+        this.ops = events.ops();
+        this.sides = events.sides();
+        this.orderIds = events.orderIds();
+        this.prices = events.prices();
+        this.qtys = events.qtys();
+        this.n = events.n();
+
+        List<Trade> expected = DataSetUtils.loadExpectedTrades(entries.get("trades.csv"));
 
         // Pass 1: TreeMap reference replay — validates expected trades AND
         // derives chunked-config inputs (price band + peak live orders).
@@ -150,7 +152,7 @@ public class BookReplayBenchmark {
         return b;
     }
 
-    // --- factory & helpers ---------------------------------------------------
+    // --- factory & validation ------------------------------------------------
 
     private L3OrderBook newBook() {
         return switch (impl) {
@@ -197,7 +199,7 @@ public class BookReplayBenchmark {
             }
             if (ref.orderCount() > peak) peak = ref.orderCount();
         }
-        assertTradesEqual(expected, actual, "treemap reference");
+        DataSetUtils.assertTradesEqual(expected, actual, "treemap reference");
         derivedMinPrice = minPrice;
         derivedMaxPrice = maxPrice;
         derivedPeakOrderCount = peak;
@@ -217,107 +219,7 @@ public class BookReplayBenchmark {
                 subject.remove(orderIds[i]);
             }
         }
-        assertTradesEqual(expected, actual, impl);
-    }
-
-    private static void assertTradesEqual(List<Trade> expected, List<Trade> actual, String label) {
-        if (actual.size() != expected.size()) {
-            throw new IllegalStateException(label + ": trade count expected="
-                + expected.size() + " actual=" + actual.size());
-        }
-        for (int i = 0; i < actual.size(); i++) {
-            if (!actual.get(i).equals(expected.get(i))) {
-                throw new IllegalStateException(label + ": trade mismatch at index " + i
-                    + " expected=" + expected.get(i) + " actual=" + actual.get(i));
-            }
-        }
-    }
-
-    private void loadEvents(List<String> lines) {
-        if (lines == null) {
-            throw new IllegalStateException("dataset missing events.csv entry");
-        }
-        int count = lines.size() - 1;
-        ops = new byte[count];
-        sides = new byte[count];
-        orderIds = new long[count];
-        prices = new long[count];
-        qtys = new long[count];
-        for (int i = 0; i < count; i++) {
-            String[] parts = lines.get(i + 1).split(",", -1);
-            ops[i] = (byte) parts[1].charAt(0);
-            sides[i] = parts[2].isEmpty() ? 0 : (byte) parts[2].charAt(0);
-            orderIds[i] = Long.parseLong(parts[3]);
-            prices[i] = Long.parseLong(parts[4]);
-            qtys[i] = Long.parseLong(parts[5]);
-        }
-        n = count;
-    }
-
-    private static List<Trade> loadExpectedTrades(List<String> lines) {
-        if (lines == null) {
-            throw new IllegalStateException("dataset missing trades.csv entry");
-        }
-        List<Trade> out = new ArrayList<>(Math.max(0, lines.size() - 1));
-        for (int i = 1; i < lines.size(); i++) {
-            String[] parts = lines.get(i).split(",", -1);
-            out.add(new Trade(
-                Long.parseLong(parts[1]),
-                Long.parseLong(parts[2]),
-                Side.valueOf(parts[3]),
-                Long.parseLong(parts[4]),
-                Long.parseLong(parts[5])));
-        }
-        return out;
-    }
-
-    /** Returns {@code key=value} pairs parsed from meta.txt lines; empty if absent. */
-    private static Map<String, String> readMeta(List<String> lines) {
-        Map<String, String> out = new LinkedHashMap<>();
-        for (String line : lines) {
-            int eq = line.indexOf('=');
-            if (eq <= 0) continue;
-            out.put(line.substring(0, eq).trim(), line.substring(eq + 1).trim());
-        }
-        return out;
-    }
-
-    private static PrecisionSpec precisionSpecFromMeta(Map<String, String> meta) {
-        int priceScale = Integer.parseInt(meta.getOrDefault("priceScale", "0"));
-        long priceTick = Long.parseLong(meta.getOrDefault("priceTick", "1"));
-        int qtyScale = Integer.parseInt(meta.getOrDefault("qtyScale", "0"));
-        long qtyStep = Long.parseLong(meta.getOrDefault("qtyStep", "1"));
-        return PrecisionSpec.of(priceScale, priceTick, qtyScale, qtyStep);
-    }
-
-    /**
-     * Read every entry of {@code /datasets/<name>.zip} into in-memory line lists.
-     * The zip is small (≤ 10 MB compressed) and we hit each entry once per
-     * trial setup, so eager full-read is simpler than streaming.
-     */
-    private static Map<String, List<String>> loadDatasetEntries(String datasetName) throws IOException {
-        String resource = DATASET_RESOURCE_PREFIX + datasetName + ".zip";
-        InputStream in = BookReplayBenchmark.class.getResourceAsStream(resource);
-        if (in == null) {
-            throw new IOException("dataset not found on classpath: " + resource
-                + " (place a zip with events.csv / trades.csv / meta.txt under src/test/resources/datasets/)");
-        }
-        Map<String, List<String>> out = new LinkedHashMap<>();
-        try (ZipInputStream zin = new ZipInputStream(in)) {
-            ZipEntry e;
-            while ((e = zin.getNextEntry()) != null) {
-                if (e.isDirectory()) continue;
-                BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(zin, StandardCharsets.UTF_8));
-                List<String> lines = new ArrayList<>();
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    lines.add(line);
-                }
-                out.put(e.getName(), lines);
-            }
-        }
-        return out;
+        DataSetUtils.assertTradesEqual(expected, actual, impl);
     }
 
     // --- JMH entry point + per-run summary ----------------------------------
@@ -338,24 +240,25 @@ public class BookReplayBenchmark {
         }
 
         RunResult first = results.iterator().next();
+        Set<String> datasets = new LinkedHashSet<>();
+        for (RunResult r : results) {
+            datasets.add(r.getParams().getParam("dataset"));
+        }
         String firstDataset = first.getParams().getParam("dataset");
         LocalDateTime now = LocalDateTime.now();
         String stamp = DateTimeFormatter.ofPattern("yyyyMMdd_HHmm").format(now);
 
         Path outDir = Path.of("data", "jmh");
         Files.createDirectories(outDir);
+        // Filename uses the first dataset for stability — per-dataset meta is
+        // intentionally not included in the body since a single run may span
+        // multiple datasets; the per-dataset breakdown is in the results table.
         Path outFile = outDir.resolve(stamp + "_" + firstDataset + ".txt");
 
         StringBuilder sb = new StringBuilder();
         sb.append("# BookReplayBenchmark run\n");
         sb.append("timestamp=").append(now).append('\n');
-        sb.append("dataset=").append(firstDataset).append('\n');
-
-        Map<String, String> meta = readMetaForDataset(firstDataset);
-        if (!meta.isEmpty()) {
-            sb.append('\n').append("## dataset meta (from meta.txt)\n");
-            meta.forEach((k, v) -> sb.append(k).append('=').append(v).append('\n'));
-        }
+        sb.append("dataset=").append(datasets).append('\n');
 
         sb.append('\n').append("## jmh config\n");
         sb.append("benchmark=").append(first.getParams().getBenchmark()).append('\n');
@@ -372,8 +275,8 @@ public class BookReplayBenchmark {
         for (RunResult r : results) {
             Result<?> primary = r.getPrimaryResult();
             String ds = r.getParams().getParam("dataset");
-            long events = readOpsPerReplay(ds);
-            double nsReplay = nanosPerReplay(primary.getScore(), primary.getScoreUnit());
+            long events = DataSetUtils.readOpsPerReplay(ds);
+            double nsReplay = DataSetUtils.nanosPerReplay(primary.getScore(), primary.getScoreUnit());
             double nsEvent = events > 0 ? nsReplay / events : Double.NaN;
             sb.append(String.format("%-18s %-22s %10d %16.0f %12.3f%n",
                 r.getParams().getParam("impl"),
@@ -408,32 +311,5 @@ public class BookReplayBenchmark {
 
         Files.writeString(outFile, sb.toString());
         System.out.println("[summary] wrote " + outFile.toAbsolutePath());
-    }
-
-    private static Map<String, String> readMetaForDataset(String datasetName) throws IOException {
-        Map<String, List<String>> entries = loadDatasetEntries(datasetName);
-        return readMeta(entries.getOrDefault("meta.txt", List.of()));
-    }
-
-    private static long readOpsPerReplay(String datasetName) throws IOException {
-        Map<String, String> meta = readMetaForDataset(datasetName);
-        String ops = meta.get("ops");
-        return ops == null ? -1L : Long.parseLong(ops);
-    }
-
-    private static double nanosPerReplay(double score, String scoreUnit) {
-        if (scoreUnit.startsWith("ns/")) {
-            return score;
-        }
-        if (scoreUnit.startsWith("us/")) {
-            return score * 1_000.0;
-        }
-        if (scoreUnit.startsWith("ms/")) {
-            return score * 1_000_000.0;
-        }
-        if (scoreUnit.startsWith("s/")) {
-            return score * 1_000_000_000.0;
-        }
-        return Double.NaN;
     }
 }
