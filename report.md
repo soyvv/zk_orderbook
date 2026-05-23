@@ -61,11 +61,15 @@ The reference implementation is intentionally simple and allocation-heavy. The o
 
 From the full local JMH sweep summarized at `data/jmh/20260524_0006_1000k_p01_cross_off.txt`, `v1-chunked-array` wins on all 18 datasets. The optimized path runs at roughly 36 to 117 ns/event across the measured workloads, which corresponds to about 8.6M to 27.8M events/sec. The reference `TreeMap` implementation runs at roughly 192 to 912 ns/event, or about 1.1M to 5.2M events/sec.
 
+These numbers were generated with JDK 21 on a MacBook Pro with Apple M2. They should be treated as machine-local benchmark results rather than universal latency guarantees.
+
 At a high level:
 
 - 1M-event datasets: `v1-chunked-array` is about 7.2x to 8.4x faster.
 - 100k-event datasets: `v1-chunked-array` is about 6.5x to 9.2x faster.
 - 10k-event datasets: `v1-chunked-array` is about 3.8x to 5.8x faster.
+
+Top-N query performance is measured separately in `data/jmh/20260524_0239_1000k_p01_cross_off_query.txt`. One query benchmark operation reads both bid and ask sides for an L5 or L10 snapshot. For `v1-chunked-array`, L5 snapshots run at roughly 21 to 37 ns/op, or about 27M to 47M two-sided snapshots/sec. L10 snapshots run at roughly 55 to 124 ns/op, or about 8M to 18M two-sided snapshots/sec. Averaged across the 18 datasets, L5 is about 24.5 ns/op (40.8M snapshots/sec) and L10 is about 68.6 ns/op (14.6M snapshots/sec).
 
 GC profiler data shows the reference implementation allocating hundreds of MB per replay, while the chunked-array implementation reports approximately 6.8 KB per replay and zero GC collections in the measured runs. That remaining allocation is benchmark/framework-level or first-touch overhead, not per-order object allocation in the hot mutation path.
 
@@ -428,6 +432,8 @@ The benchmark:
 The full local run used:
 
 ```text
+JDK=21
+machine=MacBook Pro, Apple M2
 warmupIterations=10
 measurementIterations=20
 forks=1
@@ -440,7 +446,7 @@ The benchmark can be run with GC profiling:
 ./run_perf.sh -prof gc
 ```
 
-### Timing Results
+### Replay Timing Results
 
 The latest full 18-dataset sweep compares `treemap` against the optimized `v1-chunked-array` implementation. All values are ns/event; lower is better.
 
@@ -481,6 +487,32 @@ Selected GC profiler results from `data/jmh/20260524_0006_1000k_p01_cross_off.tx
 | `1000k_p20_cross_off` | v1 chunked-array | 6.8 KB | 0 |
 
 Allocation profile after the chunk lifecycle cleanup is unchanged: `v1-chunked-array` stays around 6.8 KB per replay across datasets, with zero measured GC collections. The new `isCleanForRelease()` check adds bitmap reads on the natural-empty hot path but avoids the previous broad chunk clearing writes. The lifecycle cost shifted from clearing roughly 80 KB of chunk arrays to reading a 64-word bitmap plus scalar state checks.
+
+### Top-N Query Results
+
+`BookQueryBenchmark.topNBothSides` measures top-N aggregate level reads on a populated book. One benchmark invocation runs two calls:
+
+```java
+book.forEachLevel(Side.BID, 0, topN, consumer);
+book.forEachLevel(Side.ASK, 0, topN, consumer);
+```
+
+So each `ns/op` result is the cost of reading both sides for one L5 or L10 snapshot. The latest query run is summarized at `data/jmh/20260524_0239_1000k_p01_cross_off_query.txt`.
+
+Average results by dataset size:
+
+| Dataset size | Top N | TreeMap avg ns/op | v1 chunked-array avg ns/op | Speedup |
+| --- | ---: | ---: | ---: | ---: |
+| 1M events | 5 | 66.8 | 22.9 | 2.9x |
+| 1M events | 10 | 105.3 | 58.9 | 1.8x |
+| 100k events | 5 | 55.3 | 23.8 | 2.3x |
+| 100k events | 10 | 94.3 | 65.4 | 1.4x |
+| 10k events | 5 | 45.5 | 27.0 | 1.7x |
+| 10k events | 10 | 85.3 | 81.4 | 1.0x |
+
+The top-N fast path changes the query profile materially. `v1-chunked-array` wins 34 of 36 query cases. The two remaining misses are both small 10k post-only, wider-BBO top-10 datasets (`10k_p10_cross_off` and `10k_p20_cross_off`), where the extra chunk/bitmap path overhead can dominate because the book is small and the query emits more levels.
+
+For top-5 queries, `v1-chunked-array` is consistently faster: about 1.1x to 3.2x depending on dataset. For top-10, it remains faster in most datasets, but the margin is smaller because the query emits twice as many levels and may cross more chunk bitmap boundaries.
 
 ### Chunk Lifecycle Cleanup
 

@@ -1,8 +1,32 @@
 # orderbook
 
-Single-instrument L3 limit order book in Java.
+Single-instrument L3 limit order book in Java 21.
+
+A from-scratch exploration of low-latency book design: maintain full per-order
+state (price, quantity, FIFO position) under add / update / cancel / match
+traffic, expose price-time-priority matching, and serve top-of-book and
+top-N depth queries. Two implementations live side-by-side and are validated
+against each other:
+
+- **`TreeMapOrderBook`** — reference impl. A `TreeMap<Long, MutablePriceLevel>`
+  per side, deque per level. Compact and correct; the parity oracle for the
+  optimized impl and the baseline for benchmark comparisons.
+- **`ChunkedOrderBook` (v1)** — optimized impl. A sparse-ladder directory of
+  4096-level chunks backed by primitive arrays, an order arena with intrusive
+  FIFO links and generation-protected handles, and a cached best-chunk /
+  best-offset pointer for O(1) top-of-book. The hot path is allocation-free
+  and the public query API uses holder + visitor patterns
+  (`MutableLevel`, `LevelConsumer`, `OrderConsumer`) so callers never force
+  the book to materialize objects.
+
+A full JMH sweep across 18 generated datasets (10k–1M events × 1/10/20%
+price-range × cross-off/cross-on) shows v1-chunked-array running ~7–9× faster
+than the TreeMap reference on the replay benchmark and ~2–3× faster on top-5
+queries. See [report.md](report.md) for numbers and design rationale.
 
 ## Build
+
+Requires JDK 21 and Maven.
 
 ```
 mvn test                              # unit + parity tests
