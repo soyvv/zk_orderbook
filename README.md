@@ -47,8 +47,8 @@ To add a new dataset: generate it with `CsvDatasetGenerator` (see
 for the generator CLI), `zip` the three output files into
 `src/test/resources/datasets/<name>.zip`, then re-run.
 
-## Milestones
+## Report
 
-See [analysis.md §11](analysis.md). Current status: `TreeMapOrderBook` has the
-reference book/matching path and focused tests; precision utilities and parity
-tests still need implementation.
+See [report.md](report.md) for the design write-up — reference vs optimized
+implementation, the chunked-ladder data structure, allocation analysis, and
+benchmark results across the 18-dataset sweep.
